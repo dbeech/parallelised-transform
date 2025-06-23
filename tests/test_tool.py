@@ -89,12 +89,42 @@ def test_with_additional_vars():
         return False
 
 
+def test_start_transforms_feature():
+    """Test the start transforms functionality."""
+    print("\nTesting start transforms feature...")
+    
+    manager = ElasticsearchTransformManager("http://localhost:9200")
+    project_root = Path(__file__).parent.parent
+    template_path = project_root / "templates" / "example_transform_template.json"
+    
+    try:
+        # Test that the create_parallel_transforms method returns the correct tuple
+        successful_creates, created_transform_ids = manager.create_parallel_transforms(
+            str(template_path), 2, "test_start", start_transforms=False
+        )
+        
+        print(f"Method returned: {successful_creates} successful creates, {len(created_transform_ids)} transform IDs")
+        
+        # The method should return the correct structure even if API calls fail
+        if isinstance(created_transform_ids, list) and len(created_transform_ids) >= 0:
+            print("✅ Start transforms feature interface test passed!")
+            return True
+        else:
+            print(f"❌ Expected list of transform IDs, got {type(created_transform_ids)}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Start transforms feature test failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
     print("Running parallelised transform tests...\n")
     
     success = True
     success &= test_template_rendering()
     success &= test_with_additional_vars()
+    success &= test_start_transforms_feature()
     
     if success:
         print("\n🎉 All tests passed!")

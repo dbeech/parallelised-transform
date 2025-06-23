@@ -144,8 +144,34 @@ class ElasticsearchTransformManager:
                 self.logger.error(f"Response content: {e.response.text}")
             return False
     
+    def start_transform(self, transform_id: str) -> bool:
+        """
+        Start a single transform via Elasticsearch API.
+        
+        Args:
+            transform_id: Unique identifier for the transform
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        url = urljoin(self.elasticsearch_url, f"_transform/{transform_id}/_start")
+        
+        try:
+            response = self.session.post(url)
+            response.raise_for_status()
+            
+            self.logger.info(f"Successfully started transform: {transform_id}")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to start transform {transform_id}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                self.logger.error(f"Response content: {e.response.text}")
+            return False
+    
     def create_parallel_transforms(self, template_path: str, parallelism: int,
-                                 transform_name_prefix: str, additional_vars: Dict[str, Any] = None) -> int:
+                                 transform_name_prefix: str, additional_vars: Dict[str, Any] = None, 
+                                 start_transforms: bool = False) -> tuple[int, List[str]]:
         """
         Create multiple parallel transforms from template.
         
@@ -154,9 +180,10 @@ class ElasticsearchTransformManager:
             parallelism: Number of parallel transforms to create
             transform_name_prefix: Prefix for transform names
             additional_vars: Additional variables for template rendering
+            start_transforms: Whether to start transforms after creation (only if all created successfully)
             
         Returns:
-            Number of successfully created transforms
+            Tuple of (number of successfully created transforms, list of created transform IDs)
         """
         self.logger.info(f"Creating {parallelism} parallel transforms from template: {template_path}")
         
@@ -168,13 +195,34 @@ class ElasticsearchTransformManager:
         
         # Create transforms
         successful_creates = 0
+        created_transform_ids = []
+        
         for i, config in enumerate(transform_configs):
             transform_id = f"{transform_name_prefix}_{i}"
             if self.create_transform(transform_id, config):
                 successful_creates += 1
+                created_transform_ids.append(transform_id)
         
         self.logger.info(f"Successfully created {successful_creates}/{parallelism} transforms")
-        return successful_creates
+        
+        # Start transforms if requested and all were created successfully
+        if start_transforms and successful_creates == parallelism:
+            self.logger.info("All transforms created successfully. Starting transforms...")
+            started_count = 0
+            
+            for transform_id in created_transform_ids:
+                if self.start_transform(transform_id):
+                    started_count += 1
+            
+            self.logger.info(f"Successfully started {started_count}/{len(created_transform_ids)} transforms")
+            
+            if started_count != len(created_transform_ids):
+                self.logger.warning("Not all transforms were started successfully")
+        
+        elif start_transforms and successful_creates < parallelism:
+            self.logger.warning(f"Skipping transform start because only {successful_creates}/{parallelism} transforms were created successfully")
+        
+        return successful_creates, created_transform_ids
 
 
 def setup_logging(verbose: bool = False):
@@ -274,6 +322,12 @@ def main():
         help='Enable verbose logging'
     )
     
+    parser.add_argument(
+        '--start',
+        action='store_true',
+        help='Automatically start all transforms after creation (only if all were created successfully)'
+    )
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -316,15 +370,19 @@ def main():
         )
         
         # Create parallel transforms
-        successful_creates = manager.create_parallel_transforms(
+        successful_creates, created_transform_ids = manager.create_parallel_transforms(
             template_path=args.template,
             parallelism=args.parallelism,
             transform_name_prefix=args.transform_prefix,
-            additional_vars=additional_vars
+            additional_vars=additional_vars,
+            start_transforms=args.start
         )
         
         if successful_creates == args.parallelism:
-            logger.info("All transforms created successfully!")
+            if args.start:
+                logger.info("All transforms created and start requested!")
+            else:
+                logger.info("All transforms created successfully!")
             sys.exit(0)
         else:
             logger.warning(f"Only {successful_creates}/{args.parallelism} transforms created successfully")
