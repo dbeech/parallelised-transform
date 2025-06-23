@@ -1,0 +1,93 @@
+{
+  "source": {
+    "index": "{{ source_index | default('logs-*') }}",
+    "query": {
+      "bool": {
+        "must": [
+          {
+            "exists": {
+              "field": "{{ partition_field | default('user_id') }}"
+            }
+          },
+          {
+            "bool": {
+              "should": [
+                {
+                  "term": {
+                    "event.category": "{{ event_category | default('web') }}"
+                  }
+                },
+                {
+                  "term": {
+                    "event.type": "{{ event_type | default('access') }}"
+                  }
+                }
+              ],
+              "minimum_should_match": 1
+            }
+          }
+        ],
+        "filter": [
+          {
+            "script": {
+              "script": {
+                "source": "Math.abs(doc['{{ partition_field | default('user_id') }}'].value.hashCode()) % params.total_partitions == params.current_partition",
+                "params": {
+                  "total_partitions": {{ total_partitions | default(4) }},
+                  "current_partition": {{ hash }}
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "dest": {
+    "index": "{{ dest_prefix | default('processed') }}_{{ hash }}_{{ batch_id | default('batch') }}"
+  },
+  "pivot": {
+    "group_by": {
+      "{{ group_field | default('user_id') }}": {
+        "terms": {
+          "field": "{{ group_field | default('user_id') }}"
+        }
+      },
+      "time_bucket": {
+        "date_histogram": {
+          "field": "{{ timestamp_field | default('@timestamp') }}",
+          "calendar_interval": "{{ interval | default('1h') }}"
+        }
+      }
+    },
+    "aggregations": {
+      "total_events": {
+        "value_count": {
+          "field": "_id"
+        }
+      },
+      "unique_sessions": {
+        "cardinality": {
+          "field": "{{ session_field | default('session_id') }}"
+        }
+      },
+      "avg_duration": {
+        "avg": {
+          "field": "{{ duration_field | default('duration_ms') }}"
+        }
+      }
+    }
+  },
+  "description": "Advanced parallel transform {{ hash }}/{{ total_partitions | default(4) }} - {{ description | default('Processing logs') }}",
+  "frequency": "{{ frequency | default('5m') }}",
+  "sync": {
+    "time": {
+      "field": "{{ timestamp_field | default('@timestamp') }}",
+      "delay": "{{ sync_delay | default('60s') }}"
+    }
+  },
+  "settings": {
+    "max_page_search_size": {{ page_size | default(500) }},
+    "docs_per_second": {{ docs_per_second | default(1000) }}
+  }
+}

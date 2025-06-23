@@ -1,0 +1,48 @@
+{
+  "source": {
+    "index": "source_index",
+    "query": {
+      "bool": {
+        "filter": [
+          {
+            "term": {
+              "_routing": "{{ hash }}"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "dest": {
+    "index": "dest_index_{{ hash }}"
+  },
+  "pivot": {
+    "group_by": {
+      "user_id": {
+        "terms": {
+          "field": "user_id"
+        }
+      }
+    },
+    "aggregations": {
+      "total_amount": {
+        "sum": {
+          "field": "amount"
+        }
+      },
+      "count": {
+        "value_count": {
+          "field": "transaction_id"
+        }
+      }
+    }
+  },
+  "description": "Parallel transform for partition {{ hash }} of {{ parallelism | default(1) }}",
+  "frequency": "1m",
+  "sync": {
+    "time": {
+      "field": "event.ingested",
+      "delay": "60s"
+    }
+  }
+}

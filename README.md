@@ -1,9 +1,5 @@
 # Parallelised Elasticsearch Transform Tool ✅
 
-**Status: Complete and Ready to Use**
-
-This tool allows you to create multiple parallel Elasticsearch transforms from a single Jinja template. It's useful for processing large datasets by splitting the work across multiple transforms that can run concurrently.
-
 ## Quick Start
 
 ```bash
@@ -15,10 +11,10 @@ cp .env.example .env
 # Edit .env with your Elasticsearch URL and API key
 
 # Run with basic template
-python parallelised_transform.py --parallelism 12 --template example_transform_template.json
+python parallelised_transform.py --parallelism 12 --template templates/example_transform_template.json
 
 # Test template rendering (without ES connection)
-python test_tool.py
+python tests/test_tool.py
 ```
 
 ## Features
@@ -33,7 +29,12 @@ python test_tool.py
 ## Installation
 
 1. Clone this repository
-2. Install dependencies:
+2. (Optional) Create and activate a virtual environment:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
+3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
@@ -51,7 +52,7 @@ python parallelised_transform.py --parallelism 12 --template example_transform_t
 ```bash
 python parallelised_transform.py \
   --parallelism 12 \
-  --template my_transform_template.json \
+  --template templates/my_transform_template.json \
   --elasticsearch-url http://localhost:9200 \
   --transform-prefix my_parallel_transform \
   --api-key my-api-key-id:my-api-key-secret \
@@ -88,7 +89,7 @@ The tool uses Elasticsearch API key authentication. You can provide the API key 
 
 ### 1. Command Line
 ```bash
-python parallelised_transform.py --api-key my-api-key-id:my-api-key-secret --parallelism 5 --template my_template.json
+python parallelised_transform.py --api-key my-api-key-id:my-api-key-secret --parallelism 5 --template templates/my_template.json
 ```
 
 ### 2. Environment File (.env)
@@ -105,12 +106,12 @@ ELASTICSEARCH_API_KEY=my-api-key-id:my-api-key-secret
 
 Then run without specifying URL or API key:
 ```bash
-python parallelised_transform.py --parallelism 5 --template my_template.json
+python parallelised_transform.py --parallelism 5 --template templates/my_template.json
 ```
 
 ### 3. Custom Environment File
 ```bash
-python parallelised_transform.py --env-file /path/to/my-config.env --parallelism 5 --template my_template.json
+python parallelised_transform.py --env-file /path/to/my-config.env --parallelism 5 --template templates/my_template.json
 ```
 
 ### API Key Formats Supported
@@ -129,7 +130,7 @@ Configuration values are used in this order of priority:
 
 ## Example Template
 
-Here's an example Jinja template (`example_transform_template.json`):
+Here's an example Jinja template (`templates/example_transform_template.json`):
 
 ```json
 {
@@ -163,11 +164,22 @@ Here's an example Jinja template (`example_transform_template.json`):
         "sum": {
           "field": "amount"
         }
+      },
+      "count": {
+        "value_count": {
+          "field": "transaction_id"
+        }
       }
     }
   },
-  "description": "Parallel transform for partition {{ hash }}",
-  "frequency": "1m"
+  "description": "Parallel transform for partition {{ hash }} of {{ parallelism | default(1) }}",
+  "frequency": "1m",
+  "sync": {
+    "time": {
+      "field": "event.ingested",
+      "delay": "60s"
+    }
+  }
 }
 ```
 
@@ -175,91 +187,6 @@ This template will generate transforms that:
 1. Filter data based on routing value (using the `hash` variable)
 2. Output to different destination indices for each partition
 3. Include the partition number in the description
-
-## How It Works
-
-1. **Template Loading**: The tool loads your Jinja template file
-2. **Configuration Generation**: For each partition (0 to parallelism-1), it renders the template with the current hash/partition value
-3. **Transform Creation**: Each generated configuration is submitted to the Elasticsearch `_transform` API
-4. **Error Handling**: The tool reports success/failure for each transform creation
-
-## Use Cases
-
-- **Large Dataset Processing**: Split large transforms into smaller, parallel chunks
-- **Routing-based Partitioning**: Use Elasticsearch routing to distribute data processing
-- **Time-based Partitioning**: Process different time ranges in parallel
-- **Custom Partitioning Logic**: Use any field or combination of fields for partitioning
-
-## Error Handling
-
-The tool provides comprehensive error handling:
-- Template file validation
-- JSON syntax validation after template rendering
-- Elasticsearch API error reporting
-- Detailed logging with timestamps
-
-## Examples
-
-### Time-based Partitioning
-
-```json
-{
-  "source": {
-    "index": "logs-*",
-    "query": {
-      "range": {
-        "@timestamp": {
-          "gte": "{{ start_date }}",
-          "lt": "{{ end_date }}"
-        }
-      }
-    }
-  },
-  "dest": {
-    "index": "processed_logs_{{ hash }}"
-  }
-}
-```
-
-Run with:
-```bash
-python parallelised_transform.py \
-  --parallelism 7 \
-  --template time_based_template.json \
-  --template-vars '{"start_date": "2023-01-01", "end_date": "2023-01-08"}' \
-  --api-key your-api-key-id:your-api-key-secret
-```
-
-### User ID Hash-based Partitioning
-
-```json
-{
-  "source": {
-    "index": "user_events",
-    "query": {
-      "bool": {
-        "filter": [
-          {
-            "script": {
-              "script": {
-                "source": "doc['user_id'].value.hashCode() % params.total_partitions == params.current_partition",
-                "params": {
-                  "total_partitions": 12,
-                  "current_partition": {{ hash }}
-                }
-              }
-            }
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
 
 ## License
 
