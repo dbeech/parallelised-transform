@@ -58,6 +58,9 @@ python parallelised_transform.py \
   --api-key my-api-key-id:my-api-key-secret \
   --template-vars '{"index_pattern": "logs-*", "date_field": "@timestamp"}' \
   --env-file /path/to/my.env \
+  --start \
+  --overwrite \
+  --stop-delay 3 \
   --verbose
 ```
 
@@ -70,6 +73,9 @@ python parallelised_transform.py \
 - `--api-key`: Elasticsearch API key (format: id:key or base64 encoded, can be set via .env file)
 - `--template-vars`: JSON string of additional variables to pass to template
 - `--env-file`: Path to .env file containing configuration (defaults to .env in current directory)
+- `--start`: Automatically start all transforms after creation (only if all were created successfully)
+- `--overwrite`: Delete and recreate existing transforms instead of creating new ones
+- `--stop-delay`: Seconds to wait after stopping transforms before attempting delete (default: 2)
 - `--verbose, -v`: Enable verbose logging
 
 ## Template Variables
@@ -187,6 +193,76 @@ This template will generate transforms that:
 1. Filter data based on routing value (using the `hash` variable)
 2. Output to different destination indices for each partition
 3. Include the partition number in the description
+
+## Transform Management
+
+### Creating New Transforms
+
+By default, the tool creates new transforms using the Elasticsearch `PUT /_transform/{transform_id}` API:
+
+```bash
+# Create 3 new transforms
+python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg
+```
+
+### Updating Existing Transforms
+
+Use the `--overwrite` flag to delete and recreate existing transforms with new configurations:
+
+```bash
+# Delete and recreate existing transforms
+python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --overwrite
+```
+
+**Note**: This will:
+1. Stop any running transforms (if they're currently running)
+2. Wait for the specified delay (default 2 seconds) to ensure transforms are fully stopped
+3. Delete the existing transforms 
+4. Recreate them with the new configuration
+
+Any transform state (like checkpoints) will be lost, and transforms will start fresh.
+
+**Tip**: If you're working with transforms that take longer to stop, you can increase the delay:
+
+```bash
+# Use a longer delay for transforms that take time to stop
+python3 parallelised_transform.py --parallelism 3 --template templates/my_template.json --transform-prefix my_transform --overwrite --stop-delay 5
+```
+
+### Starting Transforms Automatically
+
+Use the `--start` flag to automatically start transforms after they are created or updated:
+
+```bash
+# Create and start transforms
+python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --start
+
+# Update and start transforms
+python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --overwrite --start
+```
+
+**Note**: Transforms are only started if ALL transforms were created/recreated successfully. This ensures consistency across your parallel transform set.
+
+### Workflow Example
+
+A typical workflow for managing parallel transforms:
+
+```bash
+# 1. Initial creation
+python3 parallelised_transform.py --parallelism 5 --template templates/my_template.json --transform-prefix my_transform --start --verbose
+
+# 2. Later updates (e.g., after template changes)
+python3 parallelised_transform.py --parallelism 5 --template templates/my_template.json --transform-prefix my_transform --overwrite --start --verbose
+```
+
+### Elasticsearch API Usage:
+- **Create Mode**: `PUT /_transform/{transform_id}` (default behavior)
+- **Overwrite Mode**: 
+  1. `POST /_transform/{transform_id}/_stop` (stop running transform)
+  2. Wait for specified delay (default 2 seconds)
+  3. `DELETE /_transform/{transform_id}` (delete stopped transform)
+  4. `PUT /_transform/{transform_id}` (create new transform)
+- **Start**: `POST /_transform/{transform_id}/_start` (with `--start` flag)
 
 ## License
 

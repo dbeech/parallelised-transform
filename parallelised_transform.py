@@ -119,28 +119,121 @@ class ElasticsearchTransformManager:
                 
         return transforms
     
-    def create_transform(self, transform_id: str, transform_config: Dict[str, Any]) -> bool:
+    def create_transform(self, transform_id: str, transform_config: Dict[str, Any], overwrite: bool = False, stop_delay_seconds: int = 2) -> bool:
         """
         Create a single transform via Elasticsearch API.
         
         Args:
             transform_id: Unique identifier for the transform
             transform_config: Transform configuration dictionary
+            overwrite: If True, delete existing transform before creating new one
+            stop_delay_seconds: Seconds to wait after stopping before attempting delete
             
         Returns:
             True if successful, False otherwise
         """
+        if overwrite:
+            # First delete the existing transform if it exists
+            self.delete_transform(transform_id, stop_delay_seconds)
+        
         url = urljoin(self.elasticsearch_url, f"_transform/{transform_id}")
         
         try:
             response = self.session.put(url, json=transform_config)
             response.raise_for_status()
             
-            self.logger.info(f"Successfully created transform: {transform_id}")
+            action_verb = "Recreated" if overwrite else "Created"
+            self.logger.info(f"Successfully {action_verb.lower()} transform: {transform_id}")
             return True
             
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to create transform {transform_id}: {e}")
+            action_verb = "recreate" if overwrite else "create"
+            self.logger.error(f"Failed to {action_verb} transform {transform_id}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                self.logger.error(f"Response content: {e.response.text}")
+            return False
+    
+    def stop_transform(self, transform_id: str) -> bool:
+        """
+        Stop a running transform via Elasticsearch API.
+        
+        Args:
+            transform_id: Unique identifier for the transform
+            
+        Returns:
+            True if successful or transform is already stopped/doesn't exist, False on other errors
+        """
+        url = urljoin(self.elasticsearch_url, f"_transform/{transform_id}/_stop")
+        
+        try:
+            response = self.session.post(url)
+            response.raise_for_status()
+            
+            # Check if the response indicates success
+            if response.status_code == 200:
+                response_data = response.json()
+                if response_data.get('acknowledged', False):
+                    self.logger.info(f"Successfully stopped transform: {transform_id}")
+                    return True
+                else:
+                    self.logger.warning(f"Transform stop not acknowledged for: {transform_id}")
+                    return False
+            
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            # If transform doesn't exist (404) or is already stopped, that's fine for our use case
+            if hasattr(e, 'response') and e.response is not None:
+                if e.response.status_code == 404:
+                    self.logger.debug(f"Transform {transform_id} does not exist (404) - skipping stop")
+                    return True
+                elif e.response.status_code == 409:
+                    # 409 typically means transform is already stopped or stopping
+                    self.logger.debug(f"Transform {transform_id} is already stopped or stopping (409)")
+                    return True
+            
+            self.logger.error(f"Failed to stop transform {transform_id}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                self.logger.error(f"Response content: {e.response.text}")
+            return False
+
+    def delete_transform(self, transform_id: str, stop_delay_seconds: int = 2) -> bool:
+        """
+        Delete a transform via Elasticsearch API.
+        First stops the transform if it's running, then deletes it.
+        
+        Args:
+            transform_id: Unique identifier for the transform
+            stop_delay_seconds: Seconds to wait after stopping before attempting delete
+            
+        Returns:
+            True if successful or transform doesn't exist, False on other errors
+        """
+        # First, try to stop the transform if it's running
+        if not self.stop_transform(transform_id):
+            self.logger.warning(f"Could not stop transform {transform_id}, attempting delete anyway")
+        else:
+            # Wait for the transform to fully stop before attempting delete
+            import time
+            self.logger.debug(f"Waiting {stop_delay_seconds} seconds for transform {transform_id} to stop completely...")
+            time.sleep(stop_delay_seconds)
+        
+        url = urljoin(self.elasticsearch_url, f"_transform/{transform_id}")
+        
+        try:
+            response = self.session.delete(url)
+            response.raise_for_status()
+            
+            self.logger.info(f"Successfully deleted transform: {transform_id}")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            # If transform doesn't exist (404), that's fine for our use case
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
+                self.logger.debug(f"Transform {transform_id} does not exist (404) - skipping delete")
+                return True
+            
+            self.logger.error(f"Failed to delete transform {transform_id}: {e}")
             if hasattr(e, 'response') and e.response is not None:
                 self.logger.error(f"Response content: {e.response.text}")
             return False
@@ -172,7 +265,8 @@ class ElasticsearchTransformManager:
     
     def create_parallel_transforms(self, template_path: str, parallelism: int,
                                  transform_name_prefix: str, additional_vars: Dict[str, Any] = None, 
-                                 start_transforms: bool = False) -> tuple[int, List[str]]:
+                                 start_transforms: bool = False, overwrite: bool = False, 
+                                 stop_delay_seconds: int = 2) -> tuple[int, List[str]]:
         """
         Create multiple parallel transforms from template.
         
@@ -182,11 +276,14 @@ class ElasticsearchTransformManager:
             transform_name_prefix: Prefix for transform names
             additional_vars: Additional variables for template rendering
             start_transforms: Whether to start transforms after creation (only if all created successfully)
+            overwrite: Whether to delete and recreate existing transforms
+            stop_delay_seconds: Seconds to wait after stopping before attempting delete (when overwriting)
             
         Returns:
             Tuple of (number of successfully created transforms, list of created transform IDs)
         """
-        self.logger.info(f"Creating {parallelism} parallel transforms from template: {template_path}")
+        action_verb = "Recreating" if overwrite else "Creating"
+        self.logger.info(f"{action_verb} {parallelism} parallel transforms from template: {template_path}")
         
         # Load template
         template = self.load_template(template_path)
@@ -194,21 +291,23 @@ class ElasticsearchTransformManager:
         # Generate transform configurations
         transform_configs = self.generate_transform_configs(template, parallelism, additional_vars)
         
-        # Create transforms
+        # Create/Update transforms
         successful_creates = 0
         created_transform_ids = []
         
         for i, config in enumerate(transform_configs):
             transform_id = f"{transform_name_prefix}_{i}"
-            if self.create_transform(transform_id, config):
+            if self.create_transform(transform_id, config, overwrite, stop_delay_seconds):
                 successful_creates += 1
                 created_transform_ids.append(transform_id)
         
-        self.logger.info(f"Successfully created {successful_creates}/{parallelism} transforms")
+        action_verb = "recreated" if overwrite else "created"
+        self.logger.info(f"Successfully {action_verb} {successful_creates}/{parallelism} transforms")
         
-        # Start transforms if requested and all were created successfully
+        # Start transforms if requested and all were created/recreated successfully
         if start_transforms and successful_creates == parallelism:
-            self.logger.info("All transforms created successfully. Starting transforms...")
+            action_verb = "recreated" if overwrite else "created"
+            self.logger.info(f"All transforms {action_verb} successfully. Starting transforms...")
             started_count = 0
             
             for transform_id in created_transform_ids:
@@ -221,7 +320,8 @@ class ElasticsearchTransformManager:
                 self.logger.warning("Not all transforms were started successfully")
         
         elif start_transforms and successful_creates < parallelism:
-            self.logger.warning(f"Skipping transform start because only {successful_creates}/{parallelism} transforms were created successfully")
+            action_verb = "recreated" if overwrite else "created"
+            self.logger.warning(f"Skipping transform start because only {successful_creates}/{parallelism} transforms were {action_verb} successfully")
         
         return successful_creates, created_transform_ids
 
@@ -329,6 +429,19 @@ def main():
         help='Automatically start all transforms after creation (only if all were created successfully)'
     )
     
+    parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='Delete and recreate existing transforms instead of creating new ones'
+    )
+    
+    parser.add_argument(
+        '--stop-delay',
+        type=int,
+        default=2,
+        help='Seconds to wait after stopping transforms before attempting delete (default: 2)'
+    )
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -348,6 +461,10 @@ def main():
     # Validate arguments
     if args.parallelism <= 0:
         logger.error("Parallelism must be a positive integer")
+        sys.exit(1)
+    
+    if args.stop_delay < 0:
+        logger.error("Stop delay must be a non-negative integer")
         sys.exit(1)
     
     if not Path(args.template).exists():
@@ -376,17 +493,20 @@ def main():
             parallelism=args.parallelism,
             transform_name_prefix=args.transform_prefix,
             additional_vars=additional_vars,
-            start_transforms=args.start
+            start_transforms=args.start,
+            overwrite=args.overwrite,
+            stop_delay_seconds=args.stop_delay
         )
         
+        action_verb = "recreated" if args.overwrite else "created"
         if successful_creates == args.parallelism:
             if args.start:
-                logger.info("All transforms created and start requested!")
+                logger.info(f"All transforms {action_verb} and start requested!")
             else:
-                logger.info("All transforms created successfully!")
+                logger.info(f"All transforms {action_verb} successfully!")
             sys.exit(0)
         else:
-            logger.warning(f"Only {successful_creates}/{args.parallelism} transforms created successfully")
+            logger.warning(f"Only {successful_creates}/{args.parallelism} transforms {action_verb} successfully")
             sys.exit(1)
             
     except Exception as e:

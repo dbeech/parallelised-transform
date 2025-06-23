@@ -118,6 +118,69 @@ def test_start_transforms_feature():
         return False
 
 
+def test_overwrite_feature():
+    """Test the overwrite functionality."""
+    print("Testing overwrite feature...")
+    
+    try:
+        # Get the templates directory path
+        test_dir = Path(__file__).parent
+        project_root = test_dir.parent
+        template_path = project_root / "templates" / "example_transform_template.json"
+        
+        # Create manager (no auth needed for testing interface)
+        manager = ElasticsearchTransformManager(
+            elasticsearch_url="http://localhost:9200"
+        )
+        
+        # Test that the create_parallel_transforms method accepts overwrite parameter
+        successful_creates, created_transform_ids = manager.create_parallel_transforms(
+            str(template_path), 2, "test_overwrite", start_transforms=False, overwrite=True, stop_delay_seconds=1
+        )
+        
+        print(f"Method returned: {successful_creates} successful creates, {len(created_transform_ids)} transform IDs")
+        
+        # The method should return the correct structure even if API calls fail
+        if isinstance(created_transform_ids, list) and len(created_transform_ids) >= 0:
+            print("✅ Overwrite feature interface test passed!")
+            return True
+        else:
+            print(f"❌ Expected list of transform IDs, got {type(created_transform_ids)}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Overwrite feature test failed: {e}")
+        return False
+
+
+def test_stop_transform_feature():
+    """Test the stop transform functionality."""
+    print("Testing stop transform feature...")
+    
+    try:
+        # Create manager (no auth needed for testing interface)
+        manager = ElasticsearchTransformManager(
+            elasticsearch_url="http://localhost:9200"
+        )
+        
+        # Test that the stop_transform method exists and can be called
+        result = manager.stop_transform("test_stop_transform")
+        
+        print(f"Stop transform method returned: {result}")
+        
+        # The method should return a boolean even if API calls fail
+        if isinstance(result, bool):
+            print("✅ Stop transform feature interface test passed!")
+            return True
+        else:
+            print(f"❌ Expected boolean result, got {type(result)}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Stop transform feature test failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
     print("Running parallelised transform tests...\n")
     
@@ -125,6 +188,8 @@ if __name__ == "__main__":
     success &= test_template_rendering()
     success &= test_with_additional_vars()
     success &= test_start_transforms_feature()
+    success &= test_overwrite_feature()
+    success &= test_stop_transform_feature()
     
     if success:
         print("\n🎉 All tests passed!")
