@@ -263,10 +263,100 @@ class ElasticsearchTransformManager:
                 self.logger.error(f"Response content: {e.response.text}")
             return False
     
+    def list_transforms_with_prefix(self, prefix: str) -> List[str]:
+        """
+        List all transforms that start with the given prefix.
+        
+        Args:
+            prefix: Transform name prefix to search for
+            
+        Returns:
+            List of transform IDs that match the prefix
+        """
+        url = urljoin(self.elasticsearch_url, "_transform")
+        
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            
+            data = response.json()
+            transforms = data.get('transforms', [])
+            
+            # Filter transforms that start with our prefix
+            matching_transforms = []
+            for transform in transforms:
+                transform_id = transform.get('id', '')
+                if transform_id.startswith(prefix):
+                    matching_transforms.append(transform_id)
+            
+            self.logger.debug(f"Found {len(matching_transforms)} transforms with prefix '{prefix}'")
+            return matching_transforms
+            
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Failed to list transforms: {e}")
+            return []
+
+    def cleanup_excess_transforms(self, transform_name_prefix: str, current_parallelism: int, 
+                                stop_delay_seconds: int = 2) -> List[str]:
+        """
+        Clean up transforms that exceed the current parallelism level.
+        
+        Args:
+            transform_name_prefix: Prefix used for transform names
+            current_parallelism: Current parallelism level (0 to parallelism-1)
+            stop_delay_seconds: Delay between stop and delete operations
+            
+        Returns:
+            List of transform IDs that were cleaned up
+        """
+        self.logger.info(f"Checking for excess transforms beyond parallelism {current_parallelism}")
+        
+        # Get all transforms with this prefix
+        existing_transforms = self.list_transforms_with_prefix(transform_name_prefix)
+        
+        # Identify transforms that should be removed (index >= current_parallelism)
+        excess_transforms = []
+        expected_pattern = f"{transform_name_prefix}_"
+        
+        for transform_id in existing_transforms:
+            if transform_id.startswith(expected_pattern):
+                # Extract the suffix number
+                suffix = transform_id[len(expected_pattern):]
+                try:
+                    index = int(suffix)
+                    if index >= current_parallelism:
+                        excess_transforms.append(transform_id)
+                except ValueError:
+                    # Suffix is not a number, skip
+                    self.logger.debug(f"Skipping transform with non-numeric suffix: {transform_id}")
+                    continue
+        
+        if not excess_transforms:
+            self.logger.info("No excess transforms found")
+            return []
+        
+        self.logger.info(f"Found {len(excess_transforms)} excess transforms to clean up: {excess_transforms}")
+        
+        # Clean up excess transforms
+        cleaned_up = []
+        for transform_id in excess_transforms:
+            try:
+                self.logger.info(f"Cleaning up excess transform: {transform_id}")
+                if self.delete_transform(transform_id, stop_delay_seconds):
+                    cleaned_up.append(transform_id)
+                    self.logger.info(f"Successfully cleaned up excess transform: {transform_id}")
+                else:
+                    self.logger.warning(f"Failed to clean up excess transform: {transform_id}")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up transform {transform_id}: {e}")
+        
+        self.logger.info(f"Cleaned up {len(cleaned_up)} excess transforms")
+        return cleaned_up
+
     def create_parallel_transforms(self, template_path: str, parallelism: int,
                                  transform_name_prefix: str, additional_vars: Dict[str, Any] = None, 
                                  start_transforms: bool = False, overwrite: bool = False, 
-                                 stop_delay_seconds: int = 2) -> tuple[int, List[str]]:
+                                 stop_delay_seconds: int = 2, cleanup_excess: bool = False) -> tuple[int, List[str]]:
         """
         Create multiple parallel transforms from template.
         
@@ -278,12 +368,23 @@ class ElasticsearchTransformManager:
             start_transforms: Whether to start transforms after creation (only if all created successfully)
             overwrite: Whether to delete and recreate existing transforms
             stop_delay_seconds: Seconds to wait after stopping before attempting delete (when overwriting)
+            cleanup_excess: Whether to clean up transforms that exceed current parallelism
             
         Returns:
             Tuple of (number of successfully created transforms, list of created transform IDs)
         """
         action_verb = "Recreating" if overwrite else "Creating"
         self.logger.info(f"{action_verb} {parallelism} parallel transforms from template: {template_path}")
+        
+        # Clean up excess transforms if requested (do this first)
+        cleaned_up_transforms = []
+        if cleanup_excess:
+            try:
+                cleaned_up_transforms = self.cleanup_excess_transforms(
+                    transform_name_prefix, parallelism, stop_delay_seconds
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to clean up excess transforms: {e}")
         
         # Load template
         template = self.load_template(template_path)
@@ -302,7 +403,11 @@ class ElasticsearchTransformManager:
                 created_transform_ids.append(transform_id)
         
         action_verb = "recreated" if overwrite else "created"
-        self.logger.info(f"Successfully {action_verb} {successful_creates}/{parallelism} transforms")
+        if cleaned_up_transforms:
+            self.logger.info(f"Successfully {action_verb} {successful_creates}/{parallelism} transforms, "
+                           f"cleaned up {len(cleaned_up_transforms)} excess transforms")
+        else:
+            self.logger.info(f"Successfully {action_verb} {successful_creates}/{parallelism} transforms")
         
         # Start transforms if requested and all were created/recreated successfully
         if start_transforms and successful_creates == parallelism:
@@ -442,6 +547,12 @@ def main():
         help='Seconds to wait after stopping transforms before attempting delete (default: 2)'
     )
     
+    parser.add_argument(
+        '--cleanup-excess',
+        action='store_true',
+        help='Clean up transforms that exceed the current parallelism level'
+    )
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -495,7 +606,8 @@ def main():
             additional_vars=additional_vars,
             start_transforms=args.start,
             overwrite=args.overwrite,
-            stop_delay_seconds=args.stop_delay
+            stop_delay_seconds=args.stop_delay,
+            cleanup_excess=args.cleanup_excess
         )
         
         action_verb = "recreated" if args.overwrite else "created"
