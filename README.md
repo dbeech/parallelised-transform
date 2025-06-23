@@ -10,11 +10,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your Elasticsearch URL and API key
 
-# Run with basic template
+# Run with example template
 python parallelised_transform.py --parallelism 12 --template templates/example_transform_template.json
 
-# Test template rendering (without ES connection)
-python tests/test_tool.py
 ```
 
 ## Features
@@ -24,7 +22,6 @@ python tests/test_tool.py
 - Configurable parallelism level via command-line argument
 - Support for Elasticsearch authentication
 - Template variable substitution using Jinja2
-- Comprehensive logging and error handling
 
 ## Installation
 
@@ -86,6 +83,7 @@ The tool automatically provides the following variables to your Jinja template:
 - `hash_value`: Alias for `hash`
 - `partition`: Alias for `hash`
 - `partition_id`: Alias for `hash`
+- `parallelism`: Number of parallel transforms being created
 
 You can also pass additional variables using the `--template-vars` argument.
 
@@ -202,7 +200,7 @@ By default, the tool creates new transforms using the Elasticsearch `PUT /_trans
 
 ```bash
 # Create 3 new transforms
-python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg
+python3 parallelised_transform.py --parallelism 3 --template templates/template.json --transform-prefix my_transform
 ```
 
 ### Updating Existing Transforms
@@ -211,7 +209,7 @@ Use the `--overwrite` flag to delete and recreate existing transforms with new c
 
 ```bash
 # Delete and recreate existing transforms
-python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --overwrite
+python3 parallelised_transform.py --parallelism 3 --template templates/template.json --transform-prefix my_transform --overwrite
 ```
 
 **Note**: This will:
@@ -235,10 +233,10 @@ Use the `--start` flag to automatically start transforms after they are created 
 
 ```bash
 # Create and start transforms
-python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --start
+python3 parallelised_transform.py --parallelism 3 --template templates/template.json --transform-prefix my_transform --start
 
 # Update and start transforms
-python3 parallelised_transform.py --parallelism 3 --template templates/netflow_agg_bytes_recv_by_site_v2.json --transform-prefix netflow_site_agg --overwrite --start
+python3 parallelised_transform.py --parallelism 3 --template templates/template.json --transform-prefix my_transform --overwrite --start
 ```
 
 **Note**: Transforms are only started if ALL transforms were created/recreated successfully. This ensures consistency across your parallel transform set.
