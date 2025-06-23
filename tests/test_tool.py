@@ -181,6 +181,34 @@ def test_stop_transform_feature():
         return False
 
 
+def test_cleanup_excess_feature():
+    """Test the cleanup excess transforms functionality."""
+    print("Testing cleanup excess feature...")
+    
+    try:
+        # Create manager (no auth needed for testing interface)
+        manager = ElasticsearchTransformManager(
+            elasticsearch_url="http://localhost:9200"
+        )
+        
+        # Test that the cleanup_excess_transforms method exists and can be called
+        result = manager.cleanup_excess_transforms("test_cleanup", 3, 1)
+        
+        print(f"Cleanup excess method returned: {result}")
+        
+        # The method should return a list even if API calls fail
+        if isinstance(result, list):
+            print("✅ Cleanup excess feature interface test passed!")
+            return True
+        else:
+            print(f"❌ Expected list result, got {type(result)}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Cleanup excess feature test failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
     print("Running parallelised transform tests...\n")
     
@@ -190,6 +218,7 @@ if __name__ == "__main__":
     success &= test_start_transforms_feature()
     success &= test_overwrite_feature()
     success &= test_stop_transform_feature()
+    success &= test_cleanup_excess_feature()
     
     if success:
         print("\n🎉 All tests passed!")

@@ -73,6 +73,7 @@ python parallelised_transform.py \
 - `--start`: Automatically start all transforms after creation (only if all were created successfully)
 - `--overwrite`: Delete and recreate existing transforms instead of creating new ones
 - `--stop-delay`: Seconds to wait after stopping transforms before attempting delete (default: 2)
+- `--cleanup-excess`: Clean up transforms that exceed the current parallelism level
 - `--verbose, -v`: Enable verbose logging
 
 ## Template Variables
@@ -241,16 +242,41 @@ python3 parallelised_transform.py --parallelism 3 --template templates/template.
 
 **Note**: Transforms are only started if ALL transforms were created/recreated successfully. This ensures consistency across your parallel transform set.
 
-### Workflow Example
+### Cleaning Up Excess Transforms
 
-A typical workflow for managing parallel transforms:
+When reducing parallelism (e.g., from 5 to 3), older transforms with higher indices (e.g., `prefix_3`, `prefix_4`) will remain running. Use the `--cleanup-excess` flag to automatically detect and remove these excess transforms:
 
 ```bash
-# 1. Initial creation
-python3 parallelised_transform.py --parallelism 5 --template templates/my_template.json --transform-prefix my_transform --start --verbose
+# Reduce parallelism from 5 to 3 and clean up excess transforms
+python3 parallelised_transform.py \
+  --parallelism 3 \
+  --template templates/my_template.json \
+  --transform-prefix my_job \
+  --cleanup-excess \
+  --verbose
 
-# 2. Later updates (e.g., after template changes)
-python3 parallelised_transform.py --parallelism 5 --template templates/my_template.json --transform-prefix my_transform --overwrite --start --verbose
+# This will:
+# 1. Detect excess transforms: my_job_3, my_job_4 (if they exist)
+# 2. Stop and delete the excess transforms
+# 3. Create/update transforms: my_job_0, my_job_1, my_job_2
+```
+
+**Important Notes:**
+- Cleanup happens BEFORE creating/updating current transforms
+- Only transforms following the `{prefix}_{number}` pattern are considered
+- Excess transforms are stopped before deletion (with configurable delay)
+- Use `--verbose` to see detailed cleanup operations
+
+**Example Workflow:**
+```bash
+# Step 1: Initial creation (parallelism = 5)
+python3 parallelised_transform.py --parallelism 5 --template my_template.json --transform-prefix job
+
+# Step 2: Increase parallelism (5 → 8) - no cleanup needed
+python3 parallelised_transform.py --parallelism 8 --template my_template.json --transform-prefix job
+
+# Step 3: Decrease parallelism (8 → 3) - cleanup needed
+python3 parallelised_transform.py --parallelism 3 --template my_template.json --transform-prefix job --cleanup-excess
 ```
 
 ### Elasticsearch API Usage:
