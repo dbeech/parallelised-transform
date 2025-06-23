@@ -102,6 +102,7 @@ class ElasticsearchTransformManager:
                 'hash_value': i,
                 'partition': i,
                 'partition_id': i,
+                'parallelism': parallelism,
                 **base_vars
             }
             
